@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin:0; overflow:hidden; background:transparent; }
+    video {
+      position:fixed;
+      top:0; left:0;
+      width:100vw; height:100vh;
+      object-fit:cover;
+      /* 避免 macOS 黑屏问题 */
+      filter: blur(0);
+    }
+  </style>
+</head>
+<body>
+  <video id="bg" autoplay loop muted playsinline webkit-playsinline>
+    <source src="{{VIDEO_PATH}}" type="video/mp4">
+  </video>
+
+  <script>
+    const video = document.getElementById('bg');
+    let lastInteraction = Date.now();
+    const IDLE_TIMEOUT = 300000; // 5分钟无操作自动暂停
+
+    // 页面可见性控制
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) video.pause();
+      else video.play().catch(() => {});
+    });
+
+    // 用户交互重置计时器
+    document.addEventListener('mousemove', () => lastInteraction = Date.now());
+    document.addEventListener('keypress', () => lastInteraction = Date.now());
+
+    // 空闲检测（省电）
+    setInterval(() => {
+      if (Date.now() - lastInteraction > IDLE_TIMEOUT && !video.paused) {
+        video.pause();
+      }
+    }, 60000);
+
+    // 接收 Objective-C 指令
+    window.externalPause = () => video.pause();
+    window.externalResume = () => video.play().catch(() => {});
+    window.isPaused = () => video.paused;
+  </script>
+</body>
+</html>
