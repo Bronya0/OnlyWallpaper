@@ -6,7 +6,7 @@
 static NSWindow *wallpaperWindow = nil;
 static WKWebView *webView = nil;
 static id webDelegate = nil;
-static dispatch_source_t idleTimer = nil;
+static NSString *currentTempHTMLPath = nil;
 
 // MARK: - 辅助函数
 static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPath) {
@@ -95,6 +95,7 @@ int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
             fprintf(stderr, "❌ HTML 渲染失败\n");
             return -1;
         }
+        currentTempHTMLPath = [tempHtmlPath copy];
         
         // 创建窗口
         NSRect screenRect = [[NSScreen mainScreen] frame];
@@ -218,6 +219,11 @@ void CleanupWallpaper() {
             webView = nil;
             webDelegate = nil;
             NSLog(@"👋 壁纸已清理");
+        }
+        if (currentTempHTMLPath) {
+            [[NSFileManager defaultManager] removeItemAtPath:currentTempHTMLPath error:nil];
+            NSLog(@"🗑️ 临时文件已删除: %@", currentTempHTMLPath);
+            currentTempHTMLPath = nil;
         }
     }
 }
