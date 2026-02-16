@@ -8,13 +8,6 @@ extern "C" {
 // 初始化壁纸（返回 0 成功，-1 失败）
 int InitWallpaper(const char *videoPath, const char *htmlTemplate);
 
-// 暂停/恢复视频
-void PauseWallpaper();
-void ResumeWallpaper();
-
-// 检查视频是否暂停
-int IsVideoPaused();
-
 // 退出清理（自动调用）
 void CleanupWallpaper();
 

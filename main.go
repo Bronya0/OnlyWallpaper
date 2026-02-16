@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/gofrs/flock"
 )
@@ -293,7 +294,12 @@ func startWallpaper(video string) {
 	fmt.Println("   • 静音播放（禁用音频解码）")
 	fmt.Println()
 
-	ret := C.InitWallpaper(C.CString(absPath), C.CString(templatePath))
+	cVideo := C.CString(absPath)
+	cTemplate := C.CString(templatePath)
+	defer C.free(unsafe.Pointer(cVideo))
+	defer C.free(unsafe.Pointer(cTemplate))
+
+	ret := C.InitWallpaper(cVideo, cTemplate)
 	if ret != 0 {
 		fmt.Println("❌ 壁纸启动失败（查看上方错误）")
 		os.Exit(1)
@@ -400,15 +406,7 @@ func checkStatus() {
 		lock.Unlock()
 		fmt.Println("⏹️  壁纸状态: 未运行")
 	} else {
-		// 检查视频是否暂停
-		paused := C.IsVideoPaused()
-		if paused == 1 {
-			fmt.Println("⏸️  壁纸状态: 运行中（视频已暂停）")
-		} else if paused == 0 {
-			fmt.Println("▶️  壁纸状态: 运行中（视频播放中）")
-		} else {
-			fmt.Println("✅ 壁纸状态: 运行中")
-		}
+		fmt.Println("✅ 壁纸状态: 运行中")
 	}
 }
 

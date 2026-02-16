@@ -168,48 +168,6 @@ void RunApp() {
     }
 }
 
-void PauseWallpaper() {
-    if (webView) {
-        [webView evaluateJavaScript:@"externalPause()" completionHandler:nil];
-    }
-}
-
-void ResumeWallpaper() {
-    if (webView) {
-        [webView evaluateJavaScript:@"externalResume()" completionHandler:nil];
-    }
-}
-
-int IsVideoPaused() {
-    __block int result = -1;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    void (^evalBlock)(void) = ^{
-        if (!webView) {
-            result = -1;
-            dispatch_semaphore_signal(sem);
-            return;
-        }
-        [webView evaluateJavaScript:@"isPaused()" completionHandler:^(id res, NSError *err) {
-            if (!err && [res isKindOfClass:[NSNumber class]]) {
-                result = [res boolValue] ? 1 : 0;
-            } else {
-                result = -1;
-            }
-            dispatch_semaphore_signal(sem);
-        }];
-    };
-    if ([NSThread isMainThread]) {
-        evalBlock();
-    } else {
-        dispatch_async(dispatch_get_main_queue(), evalBlock);
-    }
-    long waitResult = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)));
-    if (waitResult != 0) {
-        return -1;
-    }
-    return result;
-}
-
 void CleanupWallpaper() {
     NSLog(@"🧹 CleanupWallpaper 被调用");
     @autoreleasepool {
