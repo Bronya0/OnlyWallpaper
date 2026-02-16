@@ -33,7 +33,7 @@ var (
 )
 
 func init() {
-	flag.StringVar(&videoPath, "video", "", "MP4 视频文件路径（绝对路径）")
+	flag.StringVar(&videoPath, "video", "", "MP4/MOV 视频文件路径（绝对路径）")
 	flag.StringVar(&cmd, "cmd", "start", "命令: start|stop|status")
 }
 
@@ -130,8 +130,8 @@ func startWallpaper(video string) {
 	}
 
 	// 校验 MP4
-	if !strings.HasSuffix(strings.ToLower(absPath), ".mp4") {
-		fmt.Println("❌ 仅支持 .mp4 格式视频")
+	if absPath != "" && !strings.HasSuffix(strings.ToLower(absPath), ".mp4") && !strings.HasSuffix(strings.ToLower(absPath), ".mov") {
+		fmt.Println("❌ 仅支持 .mp4/.mov 格式视频")
 		os.Exit(1)
 	}
 
