@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -30,17 +31,34 @@ const (
 var (
 	videoPath string
 	cmd       string
+	daemon    bool
 )
 
 func init() {
 	flag.StringVar(&videoPath, "video", "", "MP4/MOV 视频文件路径（绝对路径）")
 	flag.StringVar(&cmd, "cmd", "start", "命令: start|stop|status")
+	flag.BoolVar(&daemon, "daemon", false, "后台运行模式（内部使用）")
 }
 
 func main() {
 	runtime.LockOSThread()
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	normalizeArgs()
 	flag.Parse()
+
+	if cmd == "start" && !daemon {
+		if videoPath == "" {
+			fmt.Println("❌ 请指定 --video /path/to/video.mp4")
+			flag.Usage()
+			os.Exit(1)
+		}
+		if err := startBackground(); err != nil {
+			fmt.Printf("❌ 后台启动失败: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ 已转入后台运行（可用 `wallpaper --cmd status` 查看，`wallpaper --cmd stop` 退出）")
+		return
+	}
 
 	// 单实例锁
 	lock := flock.New(lockFile)
@@ -121,6 +139,27 @@ func main() {
 	}
 }
 
+func normalizeArgs() {
+	if len(os.Args) < 2 {
+		return
+	}
+	for _, arg := range os.Args[1:] {
+		if arg == "--cmd" || strings.HasPrefix(arg, "--cmd=") {
+			return
+		}
+	}
+	sub := os.Args[1]
+	if strings.HasPrefix(sub, "-") {
+		return
+	}
+	switch sub {
+	case "stop", "status":
+		os.Args = append([]string{os.Args[0], "--cmd", sub}, os.Args[2:]...)
+	case "start":
+		os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
+	}
+}
+
 func startWallpaper(video string) {
 	// 路径规范化
 	absPath, err := filepath.Abs(video)
@@ -173,10 +212,44 @@ func startWallpaper(video string) {
 	// 运行主事件循环（阻塞主线程）
 	log.Println("🚀 启动主事件循环 (RunApp)")
 	C.RunApp()
-	
+
 	// 主循环结束后清理
 	log.Println("🧹 主循环结束，执行最终清理")
 	C.CleanupWallpaper()
+}
+
+func startBackground() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	args := make([]string, 0, len(os.Args))
+	hasDaemon := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--daemon" || strings.HasPrefix(arg, "--daemon=") {
+			hasDaemon = true
+		}
+		args = append(args, arg)
+	}
+	if !hasDaemon {
+		args = append(args, "--daemon")
+	}
+
+	cmd := exec.Command(exePath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	devNull, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	cmd.Stdin = devNull
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	if err := cmd.Start(); err != nil {
+		devNull.Close()
+		return err
+	}
+	devNull.Close()
+	return cmd.Process.Release()
 }
 
 func stopWallpaper() {
@@ -230,8 +303,10 @@ func checkStatus() {
 		paused := C.IsVideoPaused()
 		if paused == 1 {
 			fmt.Println("⏸️  壁纸状态: 运行中（视频已暂停）")
-		} else {
+		} else if paused == 0 {
 			fmt.Println("▶️  壁纸状态: 运行中（视频播放中）")
+		} else {
+			fmt.Println("❔ 壁纸状态: 运行中（状态获取失败）")
 		}
 	}
 }
