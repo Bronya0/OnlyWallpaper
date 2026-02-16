@@ -18,6 +18,9 @@ int IsVideoPaused();
 // 退出清理（自动调用）
 void CleanupWallpaper();
 
+// 停止应用循环
+void StopApp();
+
 // 运行主事件循环（阻塞）
 void RunApp();
 

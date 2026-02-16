@@ -23,9 +23,13 @@ static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPat
     html = [html stringByReplacingOccurrencesOfString:@"{{VIDEO_PATH}}"
                                           withString:fileURL];
                                           
-    // 写入临时文件
+        // 写入临时文件
     NSString *tempDir = NSTemporaryDirectory();
-    NSString *tempPath = [tempDir stringByAppendingPathComponent:@"wallpaper_index.html"];
+    NSString *uuid = [[NSUUID UUID] UUIDString];
+    NSString *fileName = [NSString stringWithFormat:@"wallpaper_%@.html", uuid];
+    NSString *tempPath = [tempDir stringByAppendingPathComponent:fileName];
+    NSLog(@"📄 生成临时文件: %@", tempPath);
+    
     [html writeToFile:tempPath atomically:YES encoding:NSUTF8StringEncoding error:&err];
     
     if (err) return nil;
@@ -66,6 +70,7 @@ static void setupSystemNotifications() {
 
 // MARK: - C 桥接函数
 int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
+    NSLog(@"🎬 InitWallpaper 被调用");
     @autoreleasepool {
         // 确保 NSApp 初始化
         [NSApplication sharedApplication];
@@ -135,6 +140,27 @@ int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
     }
 }
 
+void StopApp() {
+    NSLog(@"🛑 StopApp 被调用，发送退出事件");
+    @autoreleasepool {
+        // 必须在主线程执行 UI 操作
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp stop:nil];
+            // 发送一个空事件来唤醒 RunLoop，确保 stop 立即生效
+            NSEvent *event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                                location:NSZeroPoint
+                                           modifierFlags:0
+                                               timestamp:0
+                                            windowNumber:0
+                                                 context:nil
+                                                 subtype:0
+                                                   data1:0
+                                                   data2:0];
+            [NSApp postEvent:event atStart:YES];
+        });
+    }
+}
+
 void RunApp() {
     @autoreleasepool {
         [NSApp run];
@@ -168,6 +194,7 @@ int IsVideoPaused() {
 }
 
 void CleanupWallpaper() {
+    NSLog(@"🧹 CleanupWallpaper 被调用");
     @autoreleasepool {
         if (wallpaperWindow) {
             [wallpaperWindow close];

@@ -10,9 +10,11 @@ import "C"
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -36,39 +38,66 @@ func init() {
 }
 
 func main() {
+	runtime.LockOSThread()
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	flag.Parse()
 
 	// 单实例锁
 	lock := flock.New(lockFile)
 	if cmd != "stop" && cmd != "status" {
+		log.Println("🔒 尝试获取单实例锁...")
 		locked, err := lock.TryLock()
 		if err != nil || !locked {
 			// 尝试自动终止旧进程
 			pid, _ := readPID()
 			if pid > 0 {
-				fmt.Printf("⚠️  检测到旧实例 (PID: %d)，正在终止...\n", pid)
+				log.Printf("⚠️  检测到旧实例 (PID: %d)，正在终止...", pid)
 				proc, err := os.FindProcess(pid)
 				if err == nil {
+					log.Println("📡 发送 SIGTERM 信号...")
 					proc.Signal(syscall.SIGTERM)
-					// 等待释放
-					for i := 0; i < 20; i++ {
+					// 等待释放：轮询进程是否存在
+					done := false
+					for i := 0; i < 50; i++ { // 最多等 5 秒
 						time.Sleep(100 * time.Millisecond)
-						if l, _ := lock.TryLock(); l {
-							locked = true
+						// 检查进程是否还在
+						if err := proc.Signal(syscall.Signal(0)); err != nil {
+							// 进程已消失
+							log.Println("✅ 旧进程已退出")
+							done = true
 							break
 						}
 					}
+
+					if !done {
+						// 强制清理
+						log.Println("⚠️  旧实例未响应，尝试强制清理 (Kill)...")
+						proc.Kill()
+						time.Sleep(200 * time.Millisecond)
+					}
+
+					// 再次确认锁
+					log.Println("🔒 再次尝试获取锁...")
+					if l, _ := lock.TryLock(); l {
+						locked = true
+						log.Println("✅ 锁获取成功")
+					} else {
+						log.Println("❌ 锁获取失败")
+					}
 				}
 			}
-			
+
 			if !locked {
 				fmt.Println("❌ 无法获取锁，请手动运行: wallpaper stop")
 				os.Exit(1)
 			}
+		} else {
+			log.Println("✅ 首次锁获取成功")
 		}
 		// 写入当前 PID
 		writePID()
 		defer func() {
+			log.Println("🔓 释放锁并清理 PID 文件")
 			lock.Unlock()
 			os.Remove(lockFile)
 		}()
@@ -134,17 +163,20 @@ func startWallpaper(video string) {
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		fmt.Println("\n👋 正在清理壁纸资源...")
-		C.CleanupWallpaper()
-		time.Sleep(200 * time.Millisecond) // 等待窗口销毁
-		os.Exit(0)
+		sig := <-sigCh
+		log.Printf("\n👋 接收到信号: %v，正在清理壁纸资源...", sig)
+		C.StopApp()
 	}()
 
 	fmt.Println("✅ 壁纸已激活（按 Ctrl+C 或运行 `wallpaper stop` 退出）")
 
 	// 运行主事件循环（阻塞主线程）
+	log.Println("🚀 启动主事件循环 (RunApp)")
 	C.RunApp()
+	
+	// 主循环结束后清理
+	log.Println("🧹 主循环结束，执行最终清理")
+	C.CleanupWallpaper()
 }
 
 func stopWallpaper() {
