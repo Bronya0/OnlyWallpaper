@@ -8,6 +8,7 @@ package main
 */
 import "C"
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"log"
@@ -24,9 +25,11 @@ import (
 	"github.com/gofrs/flock"
 )
 
+//go:embed assets/player.html
+var embeddedAssets embed.FS
+
 const (
-	lockFile     = "/tmp/desktop-wallpaper.lock"
-	htmlTemplate = "assets/player.html"
+	lockFile = "/tmp/desktop-wallpaper.lock"
 )
 
 var (
@@ -276,14 +279,29 @@ func startWallpaper(video string) {
 		os.Exit(1)
 	}
 
-	// 检查模板
-	exePath, _ := os.Executable()
-	templatePath := filepath.Join(filepath.Dir(exePath), htmlTemplate)
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		fmt.Printf("❌ 未找到 HTML 模板: %s\n", templatePath)
-		fmt.Println("💡 请确保 assets/player.html 存在于程序目录")
+	// 从嵌入的文件系统中提取模板到临时位置
+	templateContent, err := embeddedAssets.ReadFile("assets/player.html")
+	if err != nil {
+		fmt.Printf("❌ 无法读取内嵌的 HTML 模板: %v\n", err)
 		os.Exit(1)
 	}
+
+	// 创建临时 HTML 文件
+	tmpFile, err := os.CreateTemp("", "player-*.html")
+	if err != nil {
+		fmt.Printf("❌ 无法创建临时文件: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(templateContent); err != nil {
+		tmpFile.Close()
+		fmt.Printf("❌ 无法写入模板数据: %v\n", err)
+		os.Exit(1)
+	}
+	tmpFile.Close()
+
+	templatePath := tmpFile.Name()
 
 	// 初始化壁纸
 	fmt.Printf("🎬 正在启动动态壁纸: %s\n", filepath.Base(absPath))
@@ -326,6 +344,32 @@ func startWallpaper(video string) {
 }
 
 func startBackground() error {
+	// 前置验证：在启动后台进程前检查基本条件，确保错误能输出到前台
+	if videoPath == "" {
+		return fmt.Errorf("视频路径不能为空")
+	}
+
+	absPath, err := filepath.Abs(videoPath)
+	if err != nil {
+		return fmt.Errorf("无效的视频路径: %v", err)
+	}
+
+	// 检查视频文件是否存在
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return fmt.Errorf("视频文件不存在: %s", absPath)
+	}
+
+	// 检查视频格式
+	if !strings.HasSuffix(strings.ToLower(absPath), ".mp4") && !strings.HasSuffix(strings.ToLower(absPath), ".mov") {
+		return fmt.Errorf("仅支持 .mp4/.mov 格式视频")
+	}
+
+	// 检查嵌入的模板
+	if _, err := embeddedAssets.ReadFile("assets/player.html"); err != nil {
+		return fmt.Errorf("内嵌的 HTML 模板损坏: %v", err)
+	}
+
+	// 所有验证通过，启动后台进程
 	exePath, err := os.Executable()
 	if err != nil {
 		return err

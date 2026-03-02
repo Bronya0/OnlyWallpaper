@@ -11,7 +11,10 @@ macOS 动态壁纸工具，使用 GPU 硬件加速渲染视频作为桌面背景
 ```bash
 CGO_ENABLED=1 go build -o wallpaper
 ```
-或者release下载现成的二进制文件
+
+编译后会生成一个单独的二进制文件(**无需额外的 assets 目录**)，所有资源(包括 HTML 模板)已内嵌于二进制中。
+
+或者从 release 下载现成的二进制文件
 
 ### 启动壁纸
 
@@ -51,6 +54,12 @@ chmod +x wallpaper
 | `--video` | MP4/MOV 视频文件路径 |
 | `--cmd` | 命令：`start` / `stop` / `status` / `enable-autostart` / `disable-autostart` |
 
+## 打包和部署
+
+- **单一二进制** - 所有资源（HTML、样式、脚本）已嵌入，无需携带额外文件
+- **跨目录使用** - 可以将二进制文件放在任何位置，正常运行无需依赖目录结构
+- **体积最小化** - 内置资源被编译进二进制，减少文件数量
+
 ## 注意事项
 
 1. **视频格式** - 仅支持 .mp4 和 .mov 格式
@@ -59,10 +68,13 @@ chmod +x wallpaper
    ```bash
    xcode-select --install
    ```
+4. **单实例运行** - 程序使用文件锁确保同时只有一个实例运行，新启动会自动停止旧实例
 
 ## 技术栈
 
 - **Go** - 主程序逻辑
+- **embed** - 资源内嵌
 - **cgo** - Go 与 Objective-C 互操作
 - **Objective-C** - macOS 原生窗口管理
 - **WKWebView** - HTML5 视频渲染
+
