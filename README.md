@@ -2,7 +2,7 @@
 
 macOS 动态壁纸工具，使用 GPU 硬件加速渲染视频作为桌面背景。
 将 MP4/MOV 视频文件设置为 macOS 桌面壁纸，支持开机自启等功能。
-**GPU 硬件加速** - 使用 WKWebView + Metal 视频解码，低 CPU 占用
+**GPU 硬件加速** - 使用 WKWebView + Metal 视频解码，超低功耗。
 
 ## 用法
 
