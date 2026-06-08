@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <Carbon/Carbon.h>
 #import <objc/runtime.h>
 #import "bridge.h"
 
@@ -7,6 +8,7 @@ static NSWindow *wallpaperWindow = nil;
 static WKWebView *webView = nil;
 static id webDelegate = nil;
 static NSString *currentTempHTMLPath = nil;
+static EventHotKeyRef gPauseHotKey = NULL;
 
 // MARK: - 辅助函数
 static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPath) {
@@ -45,6 +47,21 @@ static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPat
     [webView evaluateJavaScript:@"const v=document.getElementById('bg'); if(v){v.play().catch(()=>{});}" completionHandler:nil];
 }
 @end
+
+// MARK: - 全局快捷键（Cmd+Shift+P 暂停/恢复）
+static OSStatus hotkeyHandler(EventHandlerCallRef next, EventRef event, void *userData) {
+    if (webView) {
+        [webView evaluateJavaScript:@"togglePlayback()" completionHandler:nil];
+    }
+    return noErr;
+}
+
+static void setupHotkey() {
+    EventTypeSpec eventSpec = {kEventClassKeyboard, kEventHotKeyPressed};
+    InstallEventHandler(GetEventDispatcherTarget(), hotkeyHandler, 1, &eventSpec, NULL, NULL);
+    EventHotKeyID hotKeyID = {'WpP1', 1};
+    RegisterEventHotKey(kVK_ANSI_P, cmdKey + shiftKey, hotKeyID, GetEventDispatcherTarget(), 0, &gPauseHotKey);
+}
 
 static void setupSystemNotifications() {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
@@ -135,6 +152,8 @@ int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
         
         // 设置系统通知
         setupSystemNotifications();
+        // 注册全局快捷键
+        setupHotkey();
         
         NSLog(@"✅ 壁纸已启动: %@", videoPath);
         return 0;
@@ -171,6 +190,11 @@ void RunApp() {
 void CleanupWallpaper() {
     NSLog(@"🧹 CleanupWallpaper 被调用");
     @autoreleasepool {
+        if (gPauseHotKey) {
+            UnregisterEventHotKey(gPauseHotKey);
+            gPauseHotKey = NULL;
+            NSLog(@"⌨️ 快捷键已注销");
+        }
         if (wallpaperWindow) {
             [wallpaperWindow close];
             wallpaperWindow = nil;

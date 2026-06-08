@@ -57,6 +57,15 @@ chmod +x wallpaper
 |------|------|
 | `--video` | MP4/MOV 视频文件路径 |
 | `--cmd` | 命令：`start` / `stop` / `status` / `enable-autostart` / `disable-autostart` |
+| `--mute` | 静音模式（禁用音频） |
+
+## 全局快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `⌘⇧P` (Cmd+Shift+P) | 暂停/恢复壁纸播放 |
+
+无论壁纸窗口是否在最前，快捷键全局生效。
 
 ## 打包和部署
 

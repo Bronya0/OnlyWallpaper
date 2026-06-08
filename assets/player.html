@@ -15,7 +15,7 @@
   </style>
 </head>
 <body>
-  <video id="bg" autoplay loop muted playsinline webkit-playsinline>
+  <video id="bg" autoplay loop {{MUTED}} playsinline webkit-playsinline>
     <source src="{{VIDEO_PATH}}" type="video/mp4">
     <source src="{{VIDEO_PATH}}" type="video/quicktime">
   </video>
@@ -46,6 +46,10 @@
     window.externalPause = () => video.pause();
     window.externalResume = () => video.play().catch(() => {});
     window.isPaused = () => video.paused;
+    window.togglePlayback = () => {
+        if (video.paused) video.play().catch(() => {});
+        else video.pause();
+    };
   </script>
 </body>
 </html>

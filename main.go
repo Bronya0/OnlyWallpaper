@@ -2,7 +2,7 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework Cocoa -framework WebKit -framework CoreGraphics
+#cgo LDFLAGS: -framework Cocoa -framework WebKit -framework CoreGraphics -framework Carbon
 #include "bridge.h"
 #include <stdlib.h>
 */
@@ -16,7 +16,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,12 +38,14 @@ var (
 	videoPath string
 	cmd       string
 	daemon    bool
+	mute      bool
 )
 
 func init() {
 	flag.StringVar(&videoPath, "video", "", "MP4/MOV 视频文件路径（绝对路径）")
 	flag.StringVar(&cmd, "cmd", "start", "命令: start|stop|status|enable-autostart|disable-autostart")
 	flag.BoolVar(&daemon, "daemon", false, "后台运行模式（内部使用）")
+	flag.BoolVar(&mute, "mute", false, "静音模式（禁用音频）")
 }
 
 func main() {
@@ -286,6 +290,14 @@ func startWallpaper(video string) {
 		os.Exit(1)
 	}
 
+	// 替换静音占位符
+	mutedAttr := ""
+	if mute {
+		mutedAttr = "muted"
+	}
+	templateStr := strings.ReplaceAll(string(templateContent), "{{MUTED}}", mutedAttr)
+	templateContent = []byte(templateStr)
+
 	// 创建临时 HTML 文件
 	tmpFile, err := os.CreateTemp("", "player-*.html")
 	if err != nil {
@@ -309,7 +321,12 @@ func startWallpaper(video string) {
 	fmt.Println("   • Metal 硬件加速解码")
 	fmt.Println("   • 锁屏/睡眠自动暂停")
 	fmt.Println("   • 5分钟无操作自动暂停")
-	fmt.Println("   • 静音播放（禁用音频解码）")
+	if mute {
+		fmt.Println("   • 静音播放（已禁用音频）")
+	} else {
+		fmt.Println("   • 音频输出（可使用 --mute 禁用）")
+	}
+	fmt.Println("   • ⌘⇧P 暂停/恢复播放")
 	fmt.Println()
 
 	cVideo := C.CString(absPath)
@@ -333,6 +350,7 @@ func startWallpaper(video string) {
 	}()
 
 	fmt.Println("✅ 壁纸已激活（按 Ctrl+C 或运行 `wallpaper stop` 退出）")
+	fmt.Println("💡 全局快捷键 ⌘⇧P 可暂停/恢复播放")
 
 	// 运行主事件循环（阻塞主线程）
 	log.Println("🚀 启动主事件循环 (RunApp)")
@@ -451,6 +469,40 @@ func checkStatus() {
 		fmt.Println("⏹️  壁纸状态: 未运行")
 	} else {
 		fmt.Println("✅ 壁纸状态: 运行中")
+	}
+	showPowerInfo()
+}
+
+func showPowerInfo() {
+	// 电池电量与电源来源
+	if out, err := exec.Command("pmset", "-g", "batt").Output(); err == nil {
+		output := string(out)
+
+		var source string
+		if strings.Contains(output, "AC Power") {
+			source = "接通电源"
+		} else if strings.Contains(output, "Battery Power") {
+			source = "使用电池"
+		}
+
+		re := regexp.MustCompile(`(\d+)%`)
+		if m := re.FindStringSubmatch(output); len(m) >= 2 {
+			line := fmt.Sprintf("🔋 电池: %s%%", m[1])
+			if source != "" {
+				line += fmt.Sprintf(" (%s)", source)
+			}
+			fmt.Println(line)
+		}
+	}
+
+	// 系统总功耗（从 PowerTelemetryData 读取 SystemPowerIn，单位 mW）
+	if out, err := exec.Command("ioreg", "-r", "-c", "AppleSmartBattery").Output(); err == nil {
+		re := regexp.MustCompile(`"SystemPowerIn"=(\d+)`)
+		if m := re.FindStringSubmatch(string(out)); len(m) >= 2 {
+			if mw, err := strconv.Atoi(m[1]); err == nil {
+				fmt.Printf("⚡ 系统功耗: %.1fW\n", float64(mw)/1000)
+			}
+		}
 	}
 }
 
