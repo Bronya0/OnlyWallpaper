@@ -31,10 +31,6 @@
       else video.play().catch(() => {});
     });
 
-    // 用户交互重置计时器
-    document.addEventListener('mousemove', () => lastInteraction = Date.now());
-    document.addEventListener('keypress', () => lastInteraction = Date.now());
-
     // 空闲检测（省电）
     setInterval(() => {
       if (Date.now() - lastInteraction > IDLE_TIMEOUT && !video.paused) {

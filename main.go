@@ -8,6 +8,7 @@ package main
 */
 import "C"
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -422,31 +423,21 @@ func startBackground() error {
 }
 
 func stopWallpaper() {
-	// 读取 PID
 	pid, err := readPID()
 	if err != nil || pid == 0 {
 		fmt.Println("⚠️  未检测到运行中的壁纸实例")
-		// 清理可能存在的僵尸锁文件
-		os.Remove(lockFile)
-		return
-	}
-
-	// 查找并终止进程
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		fmt.Println("⚠️  进程已不存在")
 		os.Remove(lockFile)
 		return
 	}
 
 	fmt.Println("🛑 正在停止动态壁纸...")
-	err = proc.Signal(syscall.SIGTERM)
-	if err != nil {
-		fmt.Printf("❌ 停止失败: %v\n", err)
-		return
+
+	// 尝试发送终止信号（进程可能已提前退出，忽略错误）
+	if proc, err := os.FindProcess(pid); err == nil {
+		proc.Signal(syscall.SIGTERM)
 	}
 
-	// 等待锁释放
+	// 等待锁释放（内核会在进程退出时自动释放文件锁）
 	lock := flock.New(lockFile)
 	for i := 0; i < 20; i++ {
 		locked, _ := lock.TryLock()
@@ -474,8 +465,10 @@ func checkStatus() {
 }
 
 func showPowerInfo() {
-	// 电池电量与电源来源
-	if out, err := exec.Command("pmset", "-g", "batt").Output(); err == nil {
+	// 电池电量与电源来源（3 秒超时）
+	ctxBatt, cancelBatt := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelBatt()
+	if out, err := exec.CommandContext(ctxBatt, "pmset", "-g", "batt").Output(); err == nil {
 		output := string(out)
 
 		var source string
@@ -495,8 +488,10 @@ func showPowerInfo() {
 		}
 	}
 
-	// 系统总功耗（从 PowerTelemetryData 读取 SystemPowerIn，单位 mW）
-	if out, err := exec.Command("ioreg", "-r", "-c", "AppleSmartBattery").Output(); err == nil {
+	// 系统总功耗（3 秒超时）
+	ctxPower, cancelPower := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelPower()
+	if out, err := exec.CommandContext(ctxPower, "ioreg", "-r", "-c", "AppleSmartBattery").Output(); err == nil {
 		re := regexp.MustCompile(`"SystemPowerIn"=(\d+)`)
 		if m := re.FindStringSubmatch(string(out)); len(m) >= 2 {
 			if mw, err := strconv.Atoi(m[1]); err == nil {
@@ -507,7 +502,9 @@ func showPowerInfo() {
 }
 
 func writePID() {
-	os.WriteFile(lockFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+	if err := os.WriteFile(lockFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+		log.Printf("⚠️  写入 PID 文件失败: %v", err)
+	}
 }
 
 func readPID() (int, error) {
@@ -516,6 +513,8 @@ func readPID() (int, error) {
 		return 0, err
 	}
 	var pid int
-	fmt.Sscanf(string(data), "%d", &pid)
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil || pid == 0 {
+		return 0, fmt.Errorf("无效的 PID 文件内容: %s", strings.TrimSpace(string(data)))
+	}
 	return pid, nil
 }

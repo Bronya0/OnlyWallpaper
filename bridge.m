@@ -25,7 +25,7 @@ static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPat
     html = [html stringByReplacingOccurrencesOfString:@"{{VIDEO_PATH}}"
                                           withString:fileURL];
                                           
-        // 写入临时文件
+    // 写入临时文件
     NSString *tempDir = NSTemporaryDirectory();
     NSString *uuid = [[NSUUID UUID] UUIDString];
     NSString *fileName = [NSString stringWithFormat:@"wallpaper_%@.html", uuid];
