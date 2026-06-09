@@ -50,9 +50,7 @@ static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPat
 
 // MARK: - 全局快捷键（Cmd+Shift+P 暂停/恢复）
 static OSStatus hotkeyHandler(EventHandlerCallRef next, EventRef event, void *userData) {
-    if (webView) {
-        [webView evaluateJavaScript:@"togglePlayback()" completionHandler:nil];
-    }
+    if (webView) [webView evaluateJavaScript:@"togglePlayback()" completionHandler:nil];
     return noErr;
 }
 
@@ -153,7 +151,7 @@ int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
         WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
         // config.allowsInlineMediaPlayback = YES;
         config.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
-        [config.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+        [config.preferences setValue:@NO forKey:@"developerExtrasEnabled"];
         
         webView = [[WKWebView alloc] initWithFrame:screenRect configuration:config];
         webDelegate = [[WallpaperDelegate alloc] init];

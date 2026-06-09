@@ -25,10 +25,10 @@
     let lastInteraction = Date.now();
     const IDLE_TIMEOUT = 300000; // 5分钟无操作自动暂停
 
-    // 页面可见性控制
+    // 页面可见性控制（用户手动暂停后不自动恢复）
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) video.pause();
-      else video.play().catch(() => {});
+      else if (!window.userPaused) video.play().catch(() => {});
     });
 
     // 空闲检测（省电）
@@ -40,9 +40,10 @@
 
     // 接收 Objective-C 指令
     window.externalPause = () => video.pause();
-    window.externalResume = () => video.play().catch(() => {});
+    window.externalResume = () => { if (!window.userPaused) video.play().catch(() => {}); };
     window.isPaused = () => video.paused;
     window.togglePlayback = () => {
+        window.userPaused = !window.userPaused;
         if (video.paused) video.play().catch(() => {});
         else video.pause();
     };
