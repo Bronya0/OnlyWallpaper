@@ -66,16 +66,32 @@ static void setupHotkey() {
 static void setupSystemNotifications() {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     
-    // 系统睡眠/锁屏时暂停
+    // 系统睡眠时暂停（盒盖休眠）
     [nc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
                   usingBlock:^(NSNotification *note) {
         if (webView) [webView evaluateJavaScript:@"externalPause()" completionHandler:nil];
     }];
     
-    // 唤醒/解锁时恢复
+    // 显示器休眠时暂停（锁屏/关屏）
+    [nc addObserverForName:NSWorkspaceScreensDidSleepNotification object:nil queue:nil
+                  usingBlock:^(NSNotification *note) {
+        if (webView) [webView evaluateJavaScript:@"externalPause()" completionHandler:nil];
+    }];
+    
+    // 唤醒时恢复（忽略 Dark Wake：显示器仍休眠则不恢复）
     [nc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
                   usingBlock:^(NSNotification *note) {
+        // Dark Wake 时显示器未点亮，不恢复播放
+        if (CGDisplayIsAsleep(kCGDirectMainDisplay)) return;
         if (webView) [webView evaluateJavaScript:@"externalResume()" completionHandler:nil];
+    }];
+    
+    // 用户会话解锁后恢复（覆盖锁屏后解锁场景）
+    [nc addObserverForName:NSWorkspaceSessionDidBecomeActiveNotification object:nil queue:nil
+                  usingBlock:^(NSNotification *note) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (webView) [webView evaluateJavaScript:@"externalResume()" completionHandler:nil];
+        });
     }];
     
     // 应用终止前清理
