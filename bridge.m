@@ -9,6 +9,10 @@ static WKWebView *webView = nil;
 static id webDelegate = nil;
 static NSString *currentTempHTMLPath = nil;
 static EventHotKeyRef gPauseHotKey = NULL;
+static NSArray<NSString*> *gPlaylist = nil;
+static NSUInteger gCurrentVideoIndex = 0;
+static NSString *gTemplatePath = nil;
+static NSTimer *gPlaybackTimer = nil;
 
 // MARK: - 辅助函数
 static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPath) {
@@ -44,7 +48,12 @@ static NSString *renderHTMLToTempFile(NSString *templatePath, NSString *videoPat
 
 @implementation WallpaperDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    [webView evaluateJavaScript:@"const v=document.getElementById('bg'); if(v){v.play().catch(()=>{});}" completionHandler:nil];
+    NSString *js = @"const v=document.getElementById('bg'); if(v){v.play().catch(()=>{});}";
+    if (gPlaylist) {
+        // 列表模式：关掉 loop，由 ObjC 检测视频结束切下一首
+        js = @"const v=document.getElementById('bg'); if(v){v.loop=false;v.play().catch(()=>{});}";
+    }
+    [webView evaluateJavaScript:js completionHandler:nil];
 }
 @end
 
@@ -99,6 +108,50 @@ static void setupSystemNotifications() {
     }];
 }
 
+// MARK: - 播放列表（目录顺序播放）
+static void loadVideoInList(NSUInteger index) {
+    if (!gPlaylist || index >= gPlaylist.count) return;
+    gCurrentVideoIndex = index;
+    NSString *videoPath = gPlaylist[index];
+    NSLog(@"🎬 列表播放 [%lu/%lu]: %@", (unsigned long)(index + 1), (unsigned long)gPlaylist.count, videoPath);
+    
+    NSString *newHtml = renderHTMLToTempFile(gTemplatePath, videoPath);
+    if (!newHtml) return;
+    
+    if (currentTempHTMLPath) {
+        [[NSFileManager defaultManager] removeItemAtPath:currentTempHTMLPath error:nil];
+    }
+    currentTempHTMLPath = newHtml;
+    
+    NSURL *htmlURL = [NSURL fileURLWithPath:newHtml];
+    [webView loadFileURL:htmlURL allowingReadAccessToURL:[NSURL fileURLWithPath:@"/"]];
+}
+
+static void onPlaybackTimer(NSTimer *timer) {
+    if (!webView || !gPlaylist) return;
+    [webView evaluateJavaScript:@"video && video.ended" completionHandler:^(id result, NSError *error) {
+        if ([result boolValue]) {
+            NSUInteger next = (gCurrentVideoIndex + 1) % gPlaylist.count;
+            loadVideoInList(next);
+        }
+    }];
+}
+
+void SetPlaylist(const char *playlist) {
+    if (!playlist) return;
+    NSString *str = [NSString stringWithUTF8String:playlist];
+    if (str.length == 0) return;
+    
+    gPlaylist = [str componentsSeparatedByString:@"|"];
+    gCurrentVideoIndex = 0;
+    NSLog(@"🎬 播放列表已设置: %lu 个文件", (unsigned long)gPlaylist.count);
+    
+    // 启动视频结束检测定时器
+    gPlaybackTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) {
+        onPlaybackTimer(t);
+    }];
+}
+
 // MARK: - C 桥接函数
 int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
     NSLog(@"🎬 InitWallpaper 被调用");
@@ -119,6 +172,9 @@ int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
             fprintf(stderr, "❌ HTML 模板不存在: %s\n", htmlTemplateC);
             return -1;
         }
+        
+        // 保存模板路径，供后续切视频时重新生成 HTML
+        gTemplatePath = htmlTemplate;
         
         // 渲染 HTML 到临时文件
         NSString *tempHtmlPath = renderHTMLToTempFile(htmlTemplate, videoPath);
@@ -204,6 +260,12 @@ void RunApp() {
 void CleanupWallpaper() {
     NSLog(@"🧹 CleanupWallpaper 被调用");
     @autoreleasepool {
+        if (gPlaybackTimer) {
+            [gPlaybackTimer invalidate];
+            gPlaybackTimer = nil;
+        }
+        gPlaylist = nil;
+        gTemplatePath = nil;
         if (gPauseHotKey) {
             UnregisterEventHotKey(gPauseHotKey);
             gPauseHotKey = NULL;

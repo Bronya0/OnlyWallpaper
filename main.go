@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,6 +41,7 @@ var (
 	cmd       string
 	daemon    bool
 	mute      bool
+	dirPath   string
 )
 
 func init() {
@@ -47,6 +49,7 @@ func init() {
 	flag.StringVar(&cmd, "cmd", "start", "命令: start|stop|status|enable-autostart|disable-autostart")
 	flag.BoolVar(&daemon, "daemon", false, "后台运行模式（内部使用）")
 	flag.BoolVar(&mute, "mute", false, "静音模式（禁用音频）")
+	flag.StringVar(&dirPath, "dir", "", "视频目录（自动顺序播放目录内所有 mp4/mov 文件）")
 }
 
 func main() {
@@ -56,10 +59,17 @@ func main() {
 	flag.Parse()
 
 	if cmd == "start" && !daemon {
-		if videoPath == "" {
-			fmt.Println("❌ 请指定 --video /path/to/video.mp4")
+		if videoPath == "" && dirPath == "" {
+			fmt.Println("❌ 请指定 --video /path/to/video.mp4 或 --dir /path/to/folder")
 			flag.Usage()
 			os.Exit(1)
+		}
+		// --dir 模式下先校验目录存在
+		if dirPath != "" {
+			if info, err := os.Stat(dirPath); err != nil || !info.IsDir() {
+				fmt.Printf("❌ 目录无效: %s\n", dirPath)
+				os.Exit(1)
+			}
 		}
 		if err := startBackground(); err != nil {
 			fmt.Printf("❌ 后台启动失败: %v\n", err)
@@ -330,6 +340,22 @@ func startWallpaper(video string) {
 	fmt.Println("   • ⌘⇧P 暂停/恢复播放")
 	fmt.Println()
 
+	// --dir 模式：扫描目录，设置播放列表
+	if dirPath != "" {
+		files, err := scanDir(dirPath)
+		if err == nil && len(files) > 0 {
+			joined := strings.Join(files, "|")
+			cPlaylist := C.CString(joined)
+			C.SetPlaylist(cPlaylist)
+			C.free(unsafe.Pointer(cPlaylist))
+			if len(files) > 1 {
+				fmt.Printf("🎵 播放列表: %d 个文件（自动顺序播放）\n\n", len(files))
+			}
+			// 用列表第一个作为初始视频
+			absPath, _ = filepath.Abs(files[0])
+		}
+	}
+
 	cVideo := C.CString(absPath)
 	cTemplate := C.CString(templatePath)
 	defer C.free(unsafe.Pointer(cVideo))
@@ -364,8 +390,20 @@ func startWallpaper(video string) {
 
 func startBackground() error {
 	// 前置验证：在启动后台进程前检查基本条件，确保错误能输出到前台
-	if videoPath == "" {
-		return fmt.Errorf("视频路径不能为空")
+	if videoPath == "" && dirPath == "" {
+		return fmt.Errorf("视频路径或目录不能为空")
+	}
+
+	// --dir 模式：扫描目录，将第一个文件设为 videoPath（后续在 startWallpaper 中设完整列表）
+	if dirPath != "" {
+		files, err := scanDir(dirPath)
+		if err != nil {
+			return fmt.Errorf("扫描目录失败: %v", err)
+		}
+		if len(files) == 0 {
+			return fmt.Errorf("目录 %s 中没有 mp4/mov 文件", dirPath)
+		}
+		videoPath = files[0]
 	}
 
 	absPath, err := filepath.Abs(videoPath)
@@ -499,6 +537,25 @@ func showPowerInfo() {
 			}
 		}
 	}
+}
+
+func scanDir(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") {
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func writePID() {

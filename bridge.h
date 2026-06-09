@@ -17,6 +17,9 @@ void StopApp();
 // 运行主事件循环（阻塞）
 void RunApp();
 
+// 设置播放列表（| 分隔的路径列表，用于目录顺序播放）
+void SetPlaylist(const char *playlist);
+
 #ifdef __cplusplus
 }
 #endif
