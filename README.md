@@ -2,36 +2,25 @@
 
 macOS 动态壁纸工具，使用 GPU 硬件加速渲染视频作为桌面背景。
 将 MP4/MOV 视频文件设置为 macOS 桌面壁纸，支持开机自启等功能。
-**GPU 硬件加速** - 使用 WKWebView + Metal 视频解码，超低功耗。
 
 ## 功能特性
 
 | 特性 | 说明 |
 |------|------|
-| GPU 硬件加速 | Metal 解码，功耗仅 10-50mW |
-| 锁屏/睡眠自动暂停 | 省电，解锁后自动恢复 |
-| 5 分钟无操作暂停 | 离开电脑自动暂停 |
-| 全局快捷键 | `⌘⇧P` 随时暂停/恢复 |
+| GPU 硬件加速 | WKWebView + Metal 视频解码，低功耗 |
+| **锁屏/盒盖自动暂停** | 解锁/开盖自动恢复 |
 | **手动暂停不自动恢复** | `⌘⇧P` 暂停后，开盖/解锁均不恢复，需再次按快捷键 |
-| **Dark Wake 防护** | 休眠中暗唤醒不恢复，避免盒盖后偶尔播放 |
-| `status` 功耗显示 | 查看电池电量与系统实时功耗 |
+| 全局快捷键 | `⌘⇧P` 随时暂停/恢复 |
+| 实时功耗显示 | `status` 命令查看电池电量与系统功耗 |
+| Dark Wake 防护 | 休眠中暗唤醒不恢复 |
+| 播放列表 | `--dir` 模式自动顺序播放目录内所有视频 |
 | 开机自启 | 通过 launchd 配置，支持后台运行 |
 
-## 用法
+## 快速开始
 
-**直接下载：从右边 release 下载现成的二进制文件**
+### 下载
 
-或者手动自行编译：
-
-### 编译
-
-```bash
-CGO_ENABLED=1 go build -o wallpaper
-```
-
-编译后会生成一个单独的二进制文件(**无需额外的 assets 目录**)，所有资源(包括 HTML 模板)已内嵌于二进制中。
-
-
+从 [Releases](https://github.com/Bronya0/OnlyWallpaper/releases) 下载最新的二进制文件。
 
 ### 启动壁纸
 
@@ -40,73 +29,73 @@ chmod +x wallpaper
 ./wallpaper --video /path/to/video.mp4
 ```
 
-### 停止壁纸
+播放目录内所有视频（自动顺序播放）：
 
 ```bash
-./wallpaper stop
+./wallpaper --dir /path/to/video/folder
+```
+
+### 停止
+
+```bash
+./wallpaper --cmd stop
 ```
 
 ### 查看状态
 
 ```bash
-./wallpaper status
+./wallpaper --cmd status
 ```
 
-显示壁纸运行状态、电池电量与系统实时功耗。
+显示运行状态、电池电量与系统实时功耗。
+
+### 静音
+
+```bash
+./wallpaper --video /path/to/video.mp4 --mute
+```
 
 ### 暂停/恢复
 
-按下 `⌘⇧P` (Cmd+Shift+P) 全局快捷键暂停或恢复壁纸播放。无需切换到壁纸窗口，任何应用中均可使用。
+按下 `⌘⇧P`（Cmd+Shift+P）全局快捷键。任何应用中均可使用。
 
 ### 开机自启
 
-设置开机自启（需指定视频路径）：
 ```bash
-./wallpaper enable-autostart --video /path/to/video.mp4
+./wallpaper --cmd enable-autostart --video /path/to/video.mp4
+./wallpaper --cmd disable-autostart
 ```
 
-取消开机自启：
-```bash
-./wallpaper disable-autostart
-```
+## 行为说明
 
-## 命令行参数
-
-| 参数 | 说明 |
+| 操作 | 效果 |
 |------|------|
-| `--video` | MP4/MOV 视频文件路径 |
-| `--cmd` | 命令：`start` / `stop` / `status` / `enable-autostart` / `disable-autostart` |
-| `--mute` | 静音模式（禁用音频） |
+| 锁屏 | 自动暂停，解锁后自动恢复 |
+| 盒盖 | 自动暂停，开盖后自动恢复 |
+| `⌘⇧P` 快捷键 | 手动暂停/恢复 |
+| 快捷键暂停后 → 锁屏/盒盖 → 解锁/开盖 | **不恢复**，需再次按快捷键恢复 |
+| 空闲无操作 | **不会自动暂停**（macOS 自身管理电源） |
 
-## 全局快捷键
+## 编译
 
-| 快捷键 | 功能 |
-|--------|------|
-| `⌘⇧P` (Cmd+Shift+P) | 暂停/恢复壁纸播放 |
+需要 macOS + Xcode Command Line Tools：
 
-无论壁纸窗口是否在最前，快捷键全局生效。
+```bash
+xcode-select --install
+CGO_ENABLED=1 go build -o wallpaper
+```
 
-## 打包和部署
-
-- **单一二进制** - 所有资源（HTML、样式、脚本）已嵌入，无需携带额外文件
-- **跨目录使用** - 可以将二进制文件放在任何位置，正常运行无需依赖目录结构
-- **体积最小化** - 内置资源被编译进二进制，减少文件数量
-
-## 注意事项
-
-1. **视频格式** - 仅支持 .mp4 和 .mov 格式
-2. **资源占用** - 视频播放会占用一定的 GPU 资源，功耗增加极少（我测试只有10-50mW，不到0.1W占用）
-3. **编译要求** - 需要安装 Xcode Command Line Tools：
-   ```bash
-   xcode-select --install
-   ```
-4. **单实例运行** - 程序使用文件锁确保同时只有一个实例运行，新启动会自动停止旧实例
+编译后生成单一二进制文件，无需额外 assets 目录（HTML 模板已内嵌）。
 
 ## 技术栈
 
 - **Go** - 主程序逻辑
-- **embed** - 资源内嵌
-- **cgo** - Go 与 Objective-C 互操作
-- **Objective-C** - macOS 原生窗口管理
+- **cgo + Objective-C** - macOS 原生窗口管理、系统通知监听
 - **WKWebView** - HTML5 视频渲染
+- **Carbon HotKey** - 全局快捷键
 
+## 注意事项
+
+1. **视频格式** — 仅支持 `.mp4` 和 `.mov`
+2. **单实例** — 使用文件锁确保同时只有一个实例在运行
+3. **编译要求** — 需要 macOS + Xcode Command Line Tools
