@@ -526,15 +526,47 @@ func showPowerInfo() {
 		}
 	}
 
-	// 系统总功耗（3 秒超时）
+	// 系统功耗（3 秒超时）
+	// Intel Mac：SystemPowerIn 字段，Apple Silicon：电池电流×电压
 	ctxPower, cancelPower := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelPower()
 	if out, err := exec.CommandContext(ctxPower, "ioreg", "-r", "-c", "AppleSmartBattery").Output(); err == nil {
-		re := regexp.MustCompile(`"SystemPowerIn"=(\d+)`)
-		if m := re.FindStringSubmatch(string(out)); len(m) >= 2 {
-			if mw, err := strconv.Atoi(m[1]); err == nil {
-				fmt.Printf("⚡ 系统功耗: %.1fW\n", float64(mw)/1000)
+		output := string(out)
+		var powerMW int
+
+		// 优先尝试 SystemPowerIn（Intel Mac）
+		re := regexp.MustCompile(`"SystemPowerIn"\s*=\s*(\d+)`)
+		if m := re.FindStringSubmatch(output); len(m) >= 2 {
+			if mw, err := strconv.Atoi(m[1]); err == nil && mw > 0 {
+				powerMW = mw
 			}
+		}
+
+		// Apple Silicon：从电池放电电流×电压计算（不插电时 Amperage 为负值）
+		if powerMW == 0 {
+			volRe := regexp.MustCompile(`"AppleRawBatteryVoltage"\s*=\s*(\d+)`)
+			ampRe := regexp.MustCompile(`"Amperage"\s*=\s*(\d+)`)
+			volM := volRe.FindStringSubmatch(output)
+			ampM := ampRe.FindStringSubmatch(output)
+			if len(volM) >= 2 && len(ampM) >= 2 {
+				if voltage, err := strconv.Atoi(volM[1]); err == nil && voltage > 0 {
+					// Amperage 是 int64，ioreg 按 uint64 打印
+					if amperageRaw, err := strconv.ParseUint(ampM[1], 10, 64); err == nil {
+						amperage := int64(amperageRaw)
+						if amperage < 0 {
+							amperage = -amperage // 放电取绝对值
+						}
+						if amperage > 0 {
+							// P(W) = I(A) × V(V) = I(mA) × V(mV) / 1e6
+							powerMW = int(int64(voltage) * amperage / 1000)
+						}
+					}
+				}
+			}
+		}
+
+		if powerMW > 0 {
+			fmt.Printf("⚡ 系统功耗: %.1fW\n", float64(powerMW)/1000)
 		}
 	}
 }

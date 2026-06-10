@@ -88,11 +88,16 @@ static void setupSystemNotifications() {
     // 唤醒时恢复（忽略 Dark Wake：显示器仍休眠则不恢复）
     [nc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
                   usingBlock:^(NSNotification *note) {
-        // Dark Wake 时显示器未点亮，不恢复播放
         if (CGDisplayIsAsleep(kCGDirectMainDisplay)) return;
         if (webView) [webView evaluateJavaScript:@"externalResume()" completionHandler:nil];
     }];
     
+    // 用户会话锁定（锁屏/快速用户切换）时暂停
+    [nc addObserverForName:NSWorkspaceSessionDidResignActiveNotification object:nil queue:nil
+                  usingBlock:^(NSNotification *note) {
+        if (webView) [webView evaluateJavaScript:@"externalPause()" completionHandler:nil];
+    }];
+
     // 用户会话解锁后恢复（覆盖锁屏后解锁场景）
     [nc addObserverForName:NSWorkspaceSessionDidBecomeActiveNotification object:nil queue:nil
                   usingBlock:^(NSNotification *note) {
@@ -141,11 +146,11 @@ void SetPlaylist(const char *playlist) {
     if (!playlist) return;
     NSString *str = [NSString stringWithUTF8String:playlist];
     if (str.length == 0) return;
-    
+
     gPlaylist = [str componentsSeparatedByString:@"|"];
     gCurrentVideoIndex = 0;
     NSLog(@"🎬 播放列表已设置: %lu 个文件", (unsigned long)gPlaylist.count);
-    
+
     // 启动视频结束检测定时器
     gPlaybackTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) {
         onPlaybackTimer(t);
@@ -154,7 +159,6 @@ void SetPlaylist(const char *playlist) {
 
 // MARK: - C 桥接函数
 int InitWallpaper(const char *videoPathC, const char *htmlTemplateC) {
-    NSLog(@"🎬 InitWallpaper 被调用");
     @autoreleasepool {
         // 确保 NSApp 初始化
         [NSApplication sharedApplication];
@@ -258,7 +262,6 @@ void RunApp() {
 }
 
 void CleanupWallpaper() {
-    NSLog(@"🧹 CleanupWallpaper 被调用");
     @autoreleasepool {
         if (gPlaybackTimer) {
             [gPlaybackTimer invalidate];

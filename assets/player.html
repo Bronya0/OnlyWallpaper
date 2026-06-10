@@ -22,30 +22,38 @@
 
   <script>
     const video = document.getElementById('bg');
-    let lastInteraction = Date.now();
-    const IDLE_TIMEOUT = 300000; // 5分钟无操作自动暂停
+    let pauseTime = 0;
 
-    // 页面可见性控制（用户手动暂停后不自动恢复）
+    // 页面可见性变化处理（锁屏/盒盖时自动暂停，解锁/开盖后自动恢复）
+    // 若用户通过快捷键手动暂停，则跳过自动恢复，直到再次快捷键恢复
+    // WKWebView 休眠唤醒后 video 解码器会重置，需显式恢复播放位置
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) video.pause();
-      else if (!window.userPaused) video.play().catch(() => {});
+      if (document.hidden) {
+        pauseTime = video.currentTime;
+        video.pause();
+      } else if (!window.userPaused) {
+        // 正常恢复播放
+        if (pauseTime > 0) video.currentTime = pauseTime;
+        video.play().catch(() => {});
+      } else {
+        // 手动暂停状态：不恢复播放，但恢复视频帧位置（防止跳到第一帧）
+        if (pauseTime > 0) video.currentTime = pauseTime;
+      }
     });
 
-    // 空闲检测（省电）
-    setInterval(() => {
-      if (Date.now() - lastInteraction > IDLE_TIMEOUT && !video.paused) {
-        video.pause();
-      }
-    }, 60000);
-
     // 接收 Objective-C 指令
-    window.externalPause = () => video.pause();
-    window.externalResume = () => { if (!window.userPaused) video.play().catch(() => {}); };
+    window.externalPause = () => { pauseTime = video.currentTime; video.pause(); };
+    window.externalResume = () => { if (!window.userPaused) { if (pauseTime > 0) video.currentTime = pauseTime; video.play().catch(() => {}); } };
     window.isPaused = () => video.paused;
     window.togglePlayback = () => {
         window.userPaused = !window.userPaused;
-        if (video.paused) video.play().catch(() => {});
-        else video.pause();
+        if (video.paused) {
+          if (pauseTime > 0) video.currentTime = pauseTime;
+          video.play().catch(() => {});
+        } else {
+          pauseTime = video.currentTime;
+          video.pause();
+        }
     };
   </script>
 </body>
