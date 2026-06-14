@@ -87,19 +87,18 @@ func main() {
 		if err != nil || !locked {
 			// 尝试自动终止旧进程
 			pid, _ := readPID()
-			if pid > 0 {
+			if pid > 0 && isWallpaperProcess(pid) {
 				log.Printf("⚠️  检测到旧实例 (PID: %d)，正在终止...", pid)
 				proc, err := os.FindProcess(pid)
 				if err == nil {
 					log.Println("📡 发送 SIGTERM 信号...")
 					proc.Signal(syscall.SIGTERM)
-					// 等待释放：轮询进程是否存在
+					// 等待释放：轮询进程是否仍然持有锁
 					done := false
 					for i := 0; i < 50; i++ { // 最多等 5 秒
 						time.Sleep(100 * time.Millisecond)
-						// 检查进程是否还在
-						if err := proc.Signal(syscall.Signal(0)); err != nil {
-							// 进程已消失
+						if l, e := lock.TryLock(); e == nil && l {
+							lock.Unlock() // 临时释放，下面正式获取
 							log.Println("✅ 旧进程已退出")
 							done = true
 							break
@@ -122,6 +121,8 @@ func main() {
 						log.Println("❌ 锁获取失败")
 					}
 				}
+			} else if pid > 0 {
+				log.Printf("⚠️  锁文件指向 PID %d，但该进程非 wallpaper 实例（可能 PID 已被复用），忽略", pid)
 			}
 
 			if !locked {
@@ -394,8 +395,10 @@ func startBackground() error {
 		return fmt.Errorf("视频路径或目录不能为空")
 	}
 
-	// --dir 模式：扫描目录，将第一个文件设为 videoPath（后续在 startWallpaper 中设完整列表）
-	if dirPath != "" {
+	// --dir 模式：扫描目录，把 --dir 替换成显式的 --video（第一个文件）
+	// 这样 daemon 子进程能直接走 --video 分支，避免子进程丢失视频路径
+	dirInArgs := dirPath != ""
+	if dirInArgs {
 		files, err := scanDir(dirPath)
 		if err != nil {
 			return fmt.Errorf("扫描目录失败: %v", err)
@@ -431,33 +434,58 @@ func startBackground() error {
 	if err != nil {
 		return err
 	}
+
+	// 构造子进程参数：从原 os.Args 中剥离 --dir（及其值），其余原样保留
 	args := make([]string, 0, len(os.Args))
 	hasDaemon := false
+	hasVideo := false
+	skipNext := false
 	for _, arg := range os.Args[1:] {
+		if skipNext {
+			// 上一个 token 是裸 --dir，当前 token 是它的值，跳过
+			skipNext = false
+			continue
+		}
 		if arg == "--daemon" || strings.HasPrefix(arg, "--daemon=") {
 			hasDaemon = true
 		}
+		if arg == "--video" || strings.HasPrefix(arg, "--video=") {
+			hasVideo = true
+		}
+		if arg == "--dir" {
+			skipNext = true // 下一个参数是目录路径，一并丢弃
+			continue
+		}
+		if strings.HasPrefix(arg, "--dir=") {
+			continue // --dir=xxx 自包含，直接跳过
+		}
 		args = append(args, arg)
 	}
+
+	// --dir 模式：注入解析出的 --video（绝对路径），让子进程走单文件分支
+	if dirInArgs && !hasVideo {
+		args = append(args, "--video", absPath)
+	}
+
 	if !hasDaemon {
 		args = append(args, "--daemon")
 	}
 
-	cmd := exec.Command(exePath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	proc := exec.Command(exePath, args...)
+	proc.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	devNull, err := os.OpenFile("/dev/null", os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-	if err := cmd.Start(); err != nil {
+	proc.Stdin = devNull
+	proc.Stdout = devNull
+	proc.Stderr = devNull
+	if err := proc.Start(); err != nil {
 		devNull.Close()
 		return err
 	}
 	devNull.Close()
-	return cmd.Process.Release()
+	return proc.Process.Release()
 }
 
 func stopWallpaper() {
@@ -487,7 +515,24 @@ func stopWallpaper() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	fmt.Println("⚠️  停止操作超时，请手动检查")
+
+	// 超时兜底：强制 Kill 后再做最后一次锁检查
+	if isWallpaperProcess(pid) {
+		fmt.Println("⚠️  优雅停止超时，强制结束进程...")
+		if proc, err := os.FindProcess(pid); err == nil {
+			proc.Kill()
+		}
+		for i := 0; i < 10; i++ { // 再等 1 秒
+			time.Sleep(100 * time.Millisecond)
+			if l, _ := lock.TryLock(); l {
+				lock.Unlock()
+				os.Remove(lockFile)
+				fmt.Println("✅ 壁纸已强制停止")
+				return
+			}
+		}
+	}
+	fmt.Println("⚠️  停止操作超时，请手动检查（ps aux | grep wallpaper）")
 }
 
 func checkStatus() {
@@ -572,7 +617,11 @@ func showPowerInfo() {
 }
 
 func scanDir(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(absDir)
 	if err != nil {
 		return nil, err
 	}
@@ -583,7 +632,8 @@ func scanDir(dir string) ([]string, error) {
 		}
 		name := strings.ToLower(e.Name())
 		if strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") {
-			files = append(files, filepath.Join(dir, e.Name()))
+			// 统一返回绝对路径，避免 daemon 子进程与 ObjC 加载时的相对路径问题
+			files = append(files, filepath.Join(absDir, e.Name()))
 		}
 	}
 	sort.Strings(files)
@@ -606,4 +656,20 @@ func readPID() (int, error) {
 		return 0, fmt.Errorf("无效的 PID 文件内容: %s", strings.TrimSpace(string(data)))
 	}
 	return pid, nil
+}
+
+// isWallpaperProcess 校验给定 PID 指向的进程是否是本程序（避免 PID 复用后误杀无关进程）。
+// 通过 ps 读取进程的可执行路径名，与本二进制名（wallpaper）做后缀匹配。
+func isWallpaperProcess(pid int) bool {
+	selfName := filepath.Base(os.Args[0])
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil {
+		return false
+	}
+	comm := strings.TrimSpace(string(out))
+	if comm == "" {
+		return false
+	}
+	// comm 可能是绝对路径或纯名字，统一取 basename 比较
+	return filepath.Base(comm) == selfName
 }
