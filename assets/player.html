@@ -45,16 +45,9 @@
     window.externalPause = () => { pauseTime = video.currentTime; video.pause(); };
     window.externalResume = () => { if (!window.userPaused) { if (pauseTime > 0) video.currentTime = pauseTime; video.play().catch(() => {}); } };
     window.isPaused = () => video.paused;
-    window.togglePlayback = () => {
-        window.userPaused = !window.userPaused;
-        if (video.paused) {
-          if (pauseTime > 0) video.currentTime = pauseTime;
-          video.play().catch(() => {});
-        } else {
-          pauseTime = video.currentTime;
-          video.pause();
-        }
-    };
+    // 手动暂停/恢复已由 ObjC 侧统一管理（gUserPaused），通过 externalPause/externalResume 广播
+    // 此处保留占位，兼容旧调用方，实际无副作用
+    window.togglePlayback = () => {};
   </script>
 </body>
 </html>
