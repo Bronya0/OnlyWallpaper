@@ -76,6 +76,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("✅ 已转入后台运行（可用 `wallpaper --cmd status` 查看，`wallpaper --cmd stop` 退出）")
+		fmt.Println("💡 新版本下载：https://github.com/Bronya0/OnlyWallpaper")
 		return
 	}
 
