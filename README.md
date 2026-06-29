@@ -1,8 +1,10 @@
 # OnlyWallpaper
 
+<a href="https://linux.do" alt="LINUX DO"><img src="https://shorturl.at/ggSqS" /></a>
+
 macOS 动态壁纸工具，使用 GPU 硬件加速渲染视频作为桌面背景。
 将 MP4/MOV 视频文件设置为 macOS 桌面壁纸，支持开机自启等功能。
-
+    
 ## 功能特性
 
 | 特性 | 说明 |
