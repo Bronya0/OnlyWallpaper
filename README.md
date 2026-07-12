@@ -4,7 +4,9 @@
 
 macOS 动态壁纸工具，使用 GPU 硬件加速渲染视频作为桌面背景。
 将 MP4/MOV 视频文件设置为 macOS 桌面壁纸，支持开机自启等功能。
-    
+
+**作者另一款开源编码 AI Agent**：[ally-agent](https://github.com/Bronya0/ally-agent)
+
 ## 功能特性
 
 | 特性 | 说明 |
