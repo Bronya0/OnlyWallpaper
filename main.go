@@ -396,10 +396,11 @@ func startBackground() error {
 		return fmt.Errorf("视频路径或目录不能为空")
 	}
 
-	// --dir 模式：扫描目录，把 --dir 替换成显式的 --video（第一个文件）
-	// 这样 daemon 子进程能直接走 --video 分支，避免子进程丢失视频路径
-	dirInArgs := dirPath != ""
-	if dirInArgs {
+	// --dir 模式：扫描目录做前置校验，第一个文件作为子进程的兜底初始视频。
+	// --dir 本身不剥离，转绝对路径后保留（见 buildDaemonArgs），子进程据此
+	// 重建完整播放列表；此前版本把 --dir 剥离成单个 --video，导致后台模式的
+	// 顺序播放退化成单文件循环
+	if dirPath != "" {
 		files, err := scanDir(dirPath)
 		if err != nil {
 			return fmt.Errorf("扫描目录失败: %v", err)
@@ -436,41 +437,7 @@ func startBackground() error {
 		return err
 	}
 
-	// 构造子进程参数：从原 os.Args 中剥离 --dir（及其值），其余原样保留
-	args := make([]string, 0, len(os.Args))
-	hasDaemon := false
-	hasVideo := false
-	skipNext := false
-	for _, arg := range os.Args[1:] {
-		if skipNext {
-			// 上一个 token 是裸 --dir，当前 token 是它的值，跳过
-			skipNext = false
-			continue
-		}
-		if arg == "--daemon" || strings.HasPrefix(arg, "--daemon=") {
-			hasDaemon = true
-		}
-		if arg == "--video" || strings.HasPrefix(arg, "--video=") {
-			hasVideo = true
-		}
-		if arg == "--dir" {
-			skipNext = true // 下一个参数是目录路径，一并丢弃
-			continue
-		}
-		if strings.HasPrefix(arg, "--dir=") {
-			continue // --dir=xxx 自包含，直接跳过
-		}
-		args = append(args, arg)
-	}
-
-	// --dir 模式：注入解析出的 --video（绝对路径），让子进程走单文件分支
-	if dirInArgs && !hasVideo {
-		args = append(args, "--video", absPath)
-	}
-
-	if !hasDaemon {
-		args = append(args, "--daemon")
-	}
+	args := buildDaemonArgs(os.Args[1:], absPath)
 
 	proc := exec.Command(exePath, args...)
 	proc.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -487,6 +454,51 @@ func startBackground() error {
 	}
 	devNull.Close()
 	return proc.Process.Release()
+}
+
+// buildDaemonArgs 构造 daemon 子进程参数（不含 argv[0]）：
+//   - --dir 规范为绝对路径后保留，子进程重新扫描目录以获得完整播放列表
+//   - 显式 --video 保留用户值；缺失时注入 initialVideo（目录首个文件），
+//     因为子进程的 start 分支要求 --video 非空
+//   - --daemon 缺失时补上
+func buildDaemonArgs(origArgs []string, initialVideo string) []string {
+	args := make([]string, 0, len(origArgs)+2)
+	hasDaemon := false
+	hasVideo := false
+	for i := 0; i < len(origArgs); i++ {
+		arg := origArgs[i]
+		switch {
+		case arg == "--dir" && i+1 < len(origArgs):
+			// 裸 --dir：其值为下一个 token（flag.Parse 已保证存在），转绝对路径后整体保留
+			i++
+			absDir, err := filepath.Abs(origArgs[i])
+			if err != nil {
+				absDir = origArgs[i]
+			}
+			args = append(args, "--dir", absDir)
+		case strings.HasPrefix(arg, "--dir="):
+			absDir, err := filepath.Abs(strings.TrimPrefix(arg, "--dir="))
+			if err != nil {
+				absDir = strings.TrimPrefix(arg, "--dir=")
+			}
+			args = append(args, "--dir="+absDir)
+		case arg == "--daemon" || strings.HasPrefix(arg, "--daemon="):
+			hasDaemon = true
+			args = append(args, arg)
+		case arg == "--video" || strings.HasPrefix(arg, "--video="):
+			hasVideo = true
+			args = append(args, arg)
+		default:
+			args = append(args, arg)
+		}
+	}
+	if !hasVideo {
+		args = append(args, "--video", initialVideo)
+	}
+	if !hasDaemon {
+		args = append(args, "--daemon")
+	}
+	return args
 }
 
 func stopWallpaper() {

@@ -73,8 +73,9 @@ static void broadcastJS(NSString *js) {
 @implementation WallpaperDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     NSString *js = @"const v=document.getElementById('bg'); if(v){v.play().catch(()=>{});}";
-    if (gPlaylist) {
-        // 列表模式：关掉 loop，由 ObjC 检测视频结束切下一首
+    if (gPlaylist.count > 1) {
+        // 多文件列表：关掉 loop，由 ObjC 检测视频结束切下一首。
+        // 单文件列表保持 HTML 原生 loop，避免每次播完整页重载产生黑屏闪烁
         js = @"const v=document.getElementById('bg'); if(v){v.loop=false;v.play().catch(()=>{});}";
     }
     [webView evaluateJavaScript:js completionHandler:nil];
@@ -172,6 +173,7 @@ static void loadVideoInListForAll(NSUInteger index) {
 
 static void onPlaybackTimer(NSTimer *timer) {
     if (gInstances.count == 0 || !gPlaylist) return;
+    if (gPlaylist.count <= 1) return; // 单文件由 HTML 原生 loop 循环，无需切换
     // 越界保护（理论上仅启动多屏不会动态增减，但防御）
     if (gMasterIndex >= gInstances.count) gMasterIndex = 0;
     WKWebView *master = gInstances[gMasterIndex].webView;
