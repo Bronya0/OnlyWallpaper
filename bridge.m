@@ -22,10 +22,16 @@
 static NSMutableArray<WallpaperInstance *> *gInstances = nil; // 每屏一个实例
 static NSUInteger gMasterIndex = 0;     // 权威源（切歌检测以 master 为准）
 static BOOL gUserPaused = NO;           // 全局手动暂停标志（统一管理，多屏同步）
+static BOOL gFocusPaused = YES;         // 其他应用或可见 Finder 窗口使桌面暂停
+static BOOL gSystemSleeping = NO;
+static BOOL gScreensSleeping = NO;
+static BOOL gSessionInactive = NO;
+static NSMutableArray<id> *gNotificationObservers = nil;
 static NSString *gTemplatePath = nil;   // 当前 HTML 模板路径（全局共享）
 static NSArray<NSString*> *gPlaylist = nil;
 static NSUInteger gCurrentVideoIndex = 0;
 static NSTimer *gPlaybackTimer = nil;
+static NSTimer *gFocusTimer = nil;       // 检测 Finder 内开窗/关窗/最小化（不一定切换应用）
 static EventHotKeyRef gPauseHotKey = NULL;
 static BOOL gCleanedUp = NO;            // CleanupWallpaper 幂等守卫，避免双重清理导致 SIGSEGV
 
@@ -66,35 +72,87 @@ static void broadcastJS(NSString *js) {
     }
 }
 
+// 所有播放入口共用同一份暂停条件，避免切歌、唤醒或快捷键绕过焦点暂停。
+static BOOL shouldAutomaticallyPause() {
+    return gFocusPaused || gSystemSleeping || gScreensSleeping || gSessionInactive ||
+           CGDisplayIsAsleep(kCGDirectMainDisplay);
+}
+
+static NSString *playbackStateJS() {
+    return [NSString stringWithFormat:@"window.setPlaybackState(%@,%@);",
+            gUserPaused ? @"true" : @"false",
+            shouldAutomaticallyPause() ? @"true" : @"false"];
+}
+
+static void updatePlaybackState() {
+    if (gCleanedUp) return;
+    broadcastJS(playbackStateJS());
+}
+
+static BOOL finderHasVisibleWindow(pid_t finderPID) {
+    // 只读取窗口归属、层级和尺寸，不读取窗口内容/标题，无需录屏或辅助功能权限。
+    NSArray<NSDictionary *> *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+    if (!windows) return YES; // 读不到窗口列表时宁可暂停，避免意外播放声音
+    for (NSDictionary *info in windows) {
+        if ([info[(__bridge id)kCGWindowOwnerPID] intValue] != finderPID) continue;
+        if ([info[(__bridge id)kCGWindowLayer] integerValue] != 0) continue;
+        if ([info[(__bridge id)kCGWindowAlpha] doubleValue] <= 0) continue;
+        NSDictionary *boundsInfo = info[(__bridge id)kCGWindowBounds];
+        CGRect bounds;
+        if ([boundsInfo isKindOfClass:[NSDictionary class]] &&
+            CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)boundsInfo, &bounds) &&
+            bounds.size.width > 0 && bounds.size.height > 0) return YES;
+    }
+    return NO;
+}
+
+static void updateFocusState(BOOL paused) {
+    if (paused != gFocusPaused) {
+        NSLog(@"%@", paused ? @"⏸️ 其他应用或 Finder 窗口在前台，自动暂停壁纸" : @"▶️ 回到桌面，解除焦点暂停");
+    }
+    gFocusPaused = paused;
+    updatePlaybackState();
+}
+
+static void updateApplicationFocus() {
+    if (gCleanedUp) return;
+    NSRunningApplication *app = [NSWorkspace sharedWorkspace].frontmostApplication;
+    BOOL paused = ![app.bundleIdentifier isEqualToString:@"com.apple.finder"] ||
+                  finderHasVisibleWindow(app.processIdentifier);
+    updateFocusState(paused);
+}
+
+static void onFocusTimer(NSTimer *timer) {
+    if (gCleanedUp || gSystemSleeping || gScreensSleeping || gSessionInactive ||
+        CGDisplayIsAsleep(kCGDirectMainDisplay)) return;
+    NSRunningApplication *app = [NSWorkspace sharedWorkspace].frontmostApplication;
+    if (![app.bundleIdentifier isEqualToString:@"com.apple.finder"]) return;
+    BOOL paused = finderHasVisibleWindow(app.processIdentifier);
+    // 状态没变就不广播 JS，其他应用在前台时也不扫描窗口。
+    if (paused != gFocusPaused) updateFocusState(paused);
+}
+
 // MARK: - WKNavigationDelegate
 @interface WallpaperDelegate : NSObject<WKNavigationDelegate>
 @end
 
 @implementation WallpaperDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    NSString *js = @"const v=document.getElementById('bg'); if(v){v.play().catch(()=>{});}";
-    if (gPlaylist.count > 1) {
-        // 多文件列表：关掉 loop，由 ObjC 检测视频结束切下一首。
-        // 单文件列表保持 HTML 原生 loop，避免每次播完整页重载产生黑屏闪烁
-        js = @"const v=document.getElementById('bg'); if(v){v.loop=false;v.play().catch(()=>{});}";
-    }
+    if (gCleanedUp) return;
+    // 切歌后的新页面也必须同步暂停状态，不能直接 play 或依赖 autoplay。
+    NSString *js = [NSString stringWithFormat:
+        @"(() => { const v=document.getElementById('bg'); if(v){v.loop=%@;} %@ })();",
+        gPlaylist.count > 1 ? @"false" : @"true", playbackStateJS()];
     [webView evaluateJavaScript:js completionHandler:nil];
 }
 @end
 
 // MARK: - 全局快捷键（Cmd+Shift+P 暂停/恢复）
-// 多屏同步：翻转全局 gUserPaused，对所有 webview 统一 pause/resume
-// 同时把 userPaused 状态同步到每个 webview 的 window.userPaused，
-// 使得 visibilitychange 的 visible 分支能与 ObjC 守卫保持一致
+// 多屏同步：只翻转手动暂停标志，焦点/休眠等自动暂停条件仍然有效。
 static OSStatus hotkeyHandler(EventHandlerCallRef next, EventRef event, void *userData) {
     gUserPaused = !gUserPaused;
-    // 同步 JS 侧的 userPaused 标志（visibilitychange 依赖它判断是否自动恢复）
-    broadcastJS([NSString stringWithFormat:@"window.userPaused=%@;", gUserPaused ? @"true" : @"false"]);
-    if (gUserPaused) {
-        broadcastJS(@"externalPause()");
-    } else {
-        broadcastJS(@"externalResume()");
-    }
+    updatePlaybackState();
     return noErr;
 }
 
@@ -106,45 +164,53 @@ static void setupHotkey() {
 }
 
 static void setupSystemNotifications() {
-    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-    
-    // 系统睡眠时暂停（盒盖休眠）
-    [nc addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:nil
-                  usingBlock:^(NSNotification *note) {
-        broadcastJS(@"externalPause()");
-    }];
-    
-    // 显示器休眠时暂停（锁屏/关屏）
-    [nc addObserverForName:NSWorkspaceScreensDidSleepNotification object:nil queue:nil
-                  usingBlock:^(NSNotification *note) {
-        broadcastJS(@"externalPause()");
-    }];
-    
-    // 唤醒时恢复（忽略 Dark Wake：显示器仍休眠则不恢复）
-    [nc addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil
-                  usingBlock:^(NSNotification *note) {
-        if (CGDisplayIsAsleep(kCGDirectMainDisplay)) return;
-        // 受全局手动暂停标志守卫：用户按过快捷键暂停则不自动恢复
-        if (!gUserPaused) broadcastJS(@"externalResume()");
-    }];
-    
-    // 用户会话锁定（锁屏/快速用户切换）时暂停
-    [nc addObserverForName:NSWorkspaceSessionDidResignActiveNotification object:nil queue:nil
-                  usingBlock:^(NSNotification *note) {
-        broadcastJS(@"externalPause()");
-    }];
+    // NSWorkspace 通知由 workspace 自己的中心发送，不是 defaultCenter。
+    NSNotificationCenter *nc = [NSWorkspace sharedWorkspace].notificationCenter;
+    gNotificationObservers = [NSMutableArray array];
+    void (^observe)(NSNotificationName, void (^)(NSNotification *)) =
+        ^(NSNotificationName name, void (^handler)(NSNotification *)) {
+            id observer = [nc addObserverForName:name object:nil
+                                          queue:[NSOperationQueue mainQueue]
+                                     usingBlock:handler];
+            [gNotificationObservers addObject:observer];
+        };
 
-    // 用户会话解锁后恢复（覆盖锁屏后解锁场景）
-    [nc addObserverForName:NSWorkspaceSessionDidBecomeActiveNotification object:nil queue:nil
-                  usingBlock:^(NSNotification *note) {
+    observe(NSWorkspaceDidActivateApplicationNotification, ^(NSNotification *note) {
+        updateApplicationFocus();
+    });
+    observe(NSWorkspaceWillSleepNotification, ^(NSNotification *note) {
+        gSystemSleeping = YES;
+        updatePlaybackState();
+    });
+    observe(NSWorkspaceScreensDidSleepNotification, ^(NSNotification *note) {
+        gScreensSleeping = YES;
+        updatePlaybackState();
+    });
+    observe(NSWorkspaceDidWakeNotification, ^(NSNotification *note) {
+        gSystemSleeping = NO;
+        updateApplicationFocus(); // 显示器仍休眠（Dark Wake）时仍保持暂停
+    });
+    observe(NSWorkspaceScreensDidWakeNotification, ^(NSNotification *note) {
+        gScreensSleeping = NO;
+        updateApplicationFocus();
+    });
+    observe(NSWorkspaceSessionDidResignActiveNotification, ^(NSNotification *note) {
+        gSessionInactive = YES;
+        updatePlaybackState();
+    });
+    observe(NSWorkspaceSessionDidBecomeActiveNotification, ^(NSNotification *note) {
+        gSessionInactive = NO;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!gUserPaused) broadcastJS(@"externalResume()");
+            // 延迟回调仍重新检查全部暂停条件，防止期间再次锁屏或切换应用。
+            updateApplicationFocus();
         });
+    });
+    updateApplicationFocus(); // 启动时也检查焦点，不必等下一次切换应用
+    gFocusTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        onFocusTimer(timer);
     }];
-    // 注：不在 NSApplicationWillTerminateNotification 里调 CleanupWallpaper。
-    // NSApp 终止流程中 run loop 上下文不再安全，[window close] 会触发 WKWebView
-    // 退出回调访问已失效内存导致 SIGSEGV。统一由 Go 侧 RunApp 返回后调一次
-    // CleanupWallpaper（此时已脱离事件循环），由幂等守卫保证不重复执行。
+    gFocusTimer.tolerance = 0.1;
+    // 清理由 Go 侧 RunApp 返回后调用，不在 NSApp 终止通知里关闭窗口。
 }
 
 // MARK: - 播放列表（目录顺序播放，所有屏同步切歌）
@@ -172,6 +238,7 @@ static void loadVideoInListForAll(NSUInteger index) {
 }
 
 static void onPlaybackTimer(NSTimer *timer) {
+    if (gCleanedUp || gUserPaused || shouldAutomaticallyPause()) return;
     if (gInstances.count == 0 || !gPlaylist) return;
     if (gPlaylist.count <= 1) return; // 单文件由 HTML 原生 loop 循环，无需切换
     // 越界保护（理论上仅启动多屏不会动态增减，但防御）
@@ -343,10 +410,19 @@ void RunApp() {
 
 void CleanupWallpaper() {
     @autoreleasepool {
-        // 幂等守卫：本函数会被 NSApplicationWillTerminateNotification 和
-        // Go 侧 RunApp 返回后各调用一次，重复清理会访问已释放对象导致 SIGSEGV。
+        // 由 Go 侧 RunApp 返回后清理，不在 NSApp 终止通知中关闭窗口。
+        // 幂等守卫防止重复清理访问已释放对象而导致 SIGSEGV。
         if (gCleanedUp) return;
         gCleanedUp = YES;
+        NSNotificationCenter *nc = [NSWorkspace sharedWorkspace].notificationCenter;
+        for (id observer in gNotificationObservers) {
+            [nc removeObserver:observer];
+        }
+        gNotificationObservers = nil;
+        if (gFocusTimer) {
+            [gFocusTimer invalidate];
+            gFocusTimer = nil;
+        }
         if (gPlaybackTimer) {
             [gPlaybackTimer invalidate];
             gPlaybackTimer = nil;

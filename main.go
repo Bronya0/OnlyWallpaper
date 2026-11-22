@@ -333,7 +333,7 @@ func startWallpaper(video string) {
 	fmt.Println("🔋 省电特性:")
 	fmt.Println("   • Metal 硬件加速解码")
 	fmt.Println("   • 锁屏/睡眠自动暂停")
-	fmt.Println("   • 5分钟无操作自动暂停")
+	fmt.Println("   • 其他应用或 Finder 文件窗口在前台时自动暂停")
 	if mute {
 		fmt.Println("   • 静音播放（已禁用音频）")
 	} else {

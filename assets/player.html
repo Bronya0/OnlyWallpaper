@@ -15,7 +15,7 @@
   </style>
 </head>
 <body>
-  <video id="bg" autoplay loop {{MUTED}} playsinline webkit-playsinline>
+  <video id="bg" loop {{MUTED}} playsinline webkit-playsinline>
     <source src="{{VIDEO_PATH}}" type="video/mp4">
     <source src="{{VIDEO_PATH}}" type="video/quicktime">
   </video>
@@ -24,29 +24,33 @@
     const video = document.getElementById('bg');
     let pauseTime = 0;
 
-    // 页面可见性变化处理（锁屏/盒盖时自动暂停，解锁/开盖后自动恢复）
-    // 若用户通过快捷键手动暂停，则跳过自动恢复，直到再次快捷键恢复
-    // WKWebView 休眠唤醒后 video 解码器会重置，需显式恢复播放位置
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        pauseTime = video.currentTime;
-        video.pause();
-      } else if (!window.userPaused) {
-        // 正常恢复播放
-        if (pauseTime > 0) video.currentTime = pauseTime;
-        video.play().catch(() => {});
-      } else {
-        // 手动暂停状态：不恢复播放，但恢复视频帧位置（防止跳到第一帧）
-        if (pauseTime > 0) video.currentTime = pauseTime;
-      }
-    });
+    window.userPaused = false;
+    // 原生状态尚未同步前保持暂停，防止启动/切歌时短暂漏播声音。
+    window.autoPaused = true;
 
-    // 接收 Objective-C 指令
-    window.externalPause = () => { pauseTime = video.currentTime; video.pause(); };
-    window.externalResume = () => { if (!window.userPaused) { if (pauseTime > 0) video.currentTime = pauseTime; video.play().catch(() => {}); } };
+    function syncPlayback() {
+      if (document.hidden || window.userPaused || window.autoPaused) {
+        // 重复暂停不能覆盖保存的位置；唤醒时解码器可能已重置到 0。
+        if (!video.paused) pauseTime = video.currentTime;
+        video.pause();
+        if (!document.hidden && pauseTime > 0) video.currentTime = pauseTime;
+        return;
+      }
+      // 已在播放时不重复 seek，避免焦点/唤醒通知让视频跳回旧位置。
+      if (!video.paused) return;
+      if (pauseTime > 0) video.currentTime = pauseTime;
+      video.play().catch(() => {});
+    }
+
+    // 可见性、手动暂停和自动暂停必须同时满足才允许恢复。
+    document.addEventListener('visibilitychange', syncPlayback);
+    window.setPlaybackState = (userPaused, autoPaused) => {
+      window.userPaused = userPaused;
+      window.autoPaused = autoPaused;
+      syncPlayback();
+    };
     window.isPaused = () => video.paused;
-    // 手动暂停/恢复已由 ObjC 侧统一管理（gUserPaused），通过 externalPause/externalResume 广播
-    // 此处保留占位，兼容旧调用方，实际无副作用
+    // 兼容旧调用方；手动状态统一由 Objective-C 快捷键处理。
     window.togglePlayback = () => {};
   </script>
 </body>
